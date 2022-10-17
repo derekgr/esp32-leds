@@ -5,7 +5,9 @@
 
 #define CLOCK_PIN (25)
 #define DATA_PIN  (26)
-#define CLOCK_PERIOD_MICROS (100)
+
+// At least 2.
+#define CLOCK_PERIOD_MICROS (10)
 #define LED_LENGTH (30)
 
 typedef struct {
@@ -21,14 +23,11 @@ void tick() {
 }
 
 void clocked_send(unsigned char data) {
-  // Clock and data low.
-  gpio_set_level(DATA_PIN, 0);
-  gpio_set_level(CLOCK_PIN, 0);
-  tick();
+  // We assume clock is already pulled low.
 
   // Send data, MSB first, sampled on rising clock edge.
   for (int i = 7; i >= 0; i--) {
-    gpio_set_level(DATA_PIN, (data & (1ULL << i)) >> i);
+    gpio_set_level(DATA_PIN, (data & (1 << i)) >> i);
     tick();
     gpio_set_level(CLOCK_PIN, 1);
     tick();
@@ -38,7 +37,6 @@ void clocked_send(unsigned char data) {
 
   // Data low.
   gpio_set_level(DATA_PIN, 0);
-  tick();
 }
 
 void send_led_update(rgb_t* led_frames) {
@@ -50,7 +48,7 @@ void send_led_update(rgb_t* led_frames) {
 
   for (int i = 0; i < LED_LENGTH; i++) {
     // 11100000 | brightness from 1-32 levels, using remaining 5 bits
-    unsigned char brightness = (6ULL << 5) | (led_frames[i].brightness / 32);
+    unsigned char brightness = (7 << 5) | (led_frames[i].brightness / 32);
     clocked_send(brightness);
     clocked_send(led_frames[i].b);
     clocked_send(led_frames[i].g);
@@ -65,43 +63,41 @@ void send_led_update(rgb_t* led_frames) {
 }
 
 void app_main() {
-  // Give LED strip time a short time to settle.
+  // Give LED strip a short time to settle.
   vTaskDelay(2000 / portTICK_PERIOD_MS);
 
   const gpio_config_t gpio_conf = {
     .intr_type = GPIO_INTR_DISABLE,
     .mode = GPIO_MODE_OUTPUT,
-    .pin_bit_mask = (1ULL<<CLOCK_PIN) | (1ULL<<DATA_PIN),
+    .pin_bit_mask = (1<<CLOCK_PIN) | (1<<DATA_PIN),
     .pull_down_en = GPIO_PULLDOWN_ENABLE,
     .pull_up_en = 0,
   };
   gpio_config(&gpio_conf);
 
   rgb_t led_strip[LED_LENGTH];
+  int pos = 0;
+  int incr = 1;
   while(1) {
+    uint32_t brightness = esp_random();
     for (int i = 0; i < LED_LENGTH; i++) {
-      led_strip[i].brightness = esp_random() % 255;
-
-      switch (esp_random()%3) {
-      case 0:
-        led_strip[i].r = 255;
-        led_strip[i].g = 0;
-        led_strip[i].b = 0;
-        break;
-
-      case 1:
-        led_strip[i].r = 0;
-        led_strip[i].g = 255;
-        led_strip[i].b = 0;
-        break;
-
-      default:
-        led_strip[i].r = 0;
-        led_strip[i].b = 255;
-        led_strip[i].g = 0;
+      if (i == pos) {
+        led_strip[i].brightness = brightness % 256;
+        led_strip[i].r = (brightness * (LED_LENGTH - i)) % 256;
+        led_strip[i].g = (brightness * i) % 256;
+        led_strip[i].b = brightness % 256;
+      } else {
+        led_strip[i].brightness = 0;
       }
     }
 
     send_led_update(led_strip);
+    if (pos + incr >= LED_LENGTH) {
+      incr = -1;
+    } else if (pos + incr < 0) {
+      incr = 1;
+    }
+
+    pos += incr;
   }
 }
